@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">PlayFab</string>
+
+    <string name="error_missing_permissions">Cannot start without required permissions</string>
+
+    <string name="toast_connected">Connected to %s</string>
+    <string name="toast_disconnected">Disconnected from %s</string>
+
+    <string name="status_unknown">Please wait</string>
+    <string name="status_connected">Connected\nHold any of the volume keys to talk</string>
+
+    <string name="status_searching">Searching</string>
+
+    <string name="allowed">Allow</string>
+    <string name="disallowed">Disallow</string>
+    <string name="connecting">ToyVPN is connecting...</string>
+    <string name="connected">ToyVPN is connected!</string>
+    <string name="disconnected">ToyVPN is disconnected!</string>
+    <string name="connect">Connect!</string>
+</resources>
