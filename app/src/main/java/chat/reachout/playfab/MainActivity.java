@@ -213,16 +213,14 @@ public class MainActivity extends ConnectionsActivity implements ZerodataVPNServ
 
     @Override
     protected void onEndpointConnected(Endpoint endpoint) {
-        Toast.makeText(
-                        this, getString(R.string.toast_connected, endpoint.getName()), Toast.LENGTH_SHORT)
-                .show();
+        Toast.makeText(this, getString(R.string.toast_connected, endpoint.getName()), Toast.LENGTH_SHORT).show();
         setState(State.CONNECTED);
     }
 
     @Override
     protected void onEndpointDisconnected(Endpoint endpoint) {
         Toast.makeText(
-                        this, getString(R.string.toast_disconnected, endpoint.getName()), Toast.LENGTH_SHORT)
+                this, getString(R.string.toast_disconnected, endpoint.getName()), Toast.LENGTH_SHORT)
                 .show();
         setState(State.SEARCHING);
     }

@@ -5,15 +5,15 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
-import android.os.Bundle;
-import android.util.Log;
-import android.widget.Toast;
 
 import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
+import android.provider.Settings;
+import android.util.Log;
+import android.widget.Toast;
 
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.nearby.Nearby;
@@ -38,21 +38,25 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import static chat.reachout.playfab.Constants.TAG;
 
-/** A class that connects to Nearby Connections and provides convenience methods and callbacks. */
-public abstract class ConnectionsActivity extends Activity {
+/**
+ * A class that connects to Nearby Connections and provides convenience methods and callbacks.
+ */
+public class ZeroDataMultiPathConnector {
 
     /**
      * These permissions are required before connecting to Nearby Connections.
      */
     private static final String[] REQUIRED_PERMISSIONS;
+
     static {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             REQUIRED_PERMISSIONS =
-                    new String[] {
+                    new String[]{
                             Manifest.permission.BLUETOOTH_SCAN,
                             Manifest.permission.BLUETOOTH_ADVERTISE,
                             Manifest.permission.BLUETOOTH_CONNECT,
@@ -62,7 +66,7 @@ public abstract class ConnectionsActivity extends Activity {
                     };
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             REQUIRED_PERMISSIONS =
-                    new String[] {
+                    new String[]{
                             Manifest.permission.BLUETOOTH_SCAN,
                             Manifest.permission.BLUETOOTH_ADVERTISE,
                             Manifest.permission.BLUETOOTH_CONNECT,
@@ -73,7 +77,7 @@ public abstract class ConnectionsActivity extends Activity {
                     };
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             REQUIRED_PERMISSIONS =
-                    new String[] {
+                    new String[]{
                             Manifest.permission.BLUETOOTH,
                             Manifest.permission.BLUETOOTH_ADMIN,
                             Manifest.permission.ACCESS_WIFI_STATE,
@@ -83,7 +87,7 @@ public abstract class ConnectionsActivity extends Activity {
                     };
         } else {
             REQUIRED_PERMISSIONS =
-                    new String[] {
+                    new String[]{
                             Manifest.permission.BLUETOOTH,
                             Manifest.permission.BLUETOOTH_ADMIN,
                             Manifest.permission.ACCESS_WIFI_STATE,
@@ -95,10 +99,14 @@ public abstract class ConnectionsActivity extends Activity {
 
     private static final int REQUEST_CODE_REQUIRED_PERMISSIONS = 1;
 
-    /** Our handler to Nearby Connections. */
-    private ConnectionsClient mConnectionsClient;
+    /**
+     * Our handler to Nearby Connections.
+     */
+    private final ConnectionsClient mConnectionsClient;
 
-    /** The devices we've discovered near us. */
+    /**
+     * The devices we've discovered near us.
+     */
     private final Map<String, Endpoint> mDiscoveredEndpoints = new HashMap<>();
 
     /**
@@ -114,117 +122,85 @@ public abstract class ConnectionsActivity extends Activity {
     private final Map<String, Endpoint> mEstablishedConnections = new HashMap<>();
 
     /**
+     * Our handler to Nearby Connections.
+     */
+    private final String mLocalEndpointName;
+
+    private final String mAppServiceId;
+
+    private final Strategy mStrategy;
+
+    private final Endpoint.EndpointType mType;
+    /**
      * True if we are asking a discovered device to connect to us. While we ask, we cannot ask another
      * device.
      */
     private boolean mIsConnecting = false;
 
-    /** True if we are discovering. */
+    /**
+     * True if we are discovering.
+     */
     private boolean mIsDiscovering = false;
 
-    /** True if we are advertising. */
+    /**
+     * True if we are advertising.
+     */
     private boolean mIsAdvertising = false;
 
-    /** Callbacks for connections to other devices. */
-    private final ConnectionLifecycleCallback mConnectionLifecycleCallback =
-            new ConnectionLifecycleCallback() {
-                @Override
-                public void onConnectionInitiated(String endpointId, ConnectionInfo connectionInfo) {
-                    logD(
-                            String.format(
-                                    "onConnectionInitiated(endpointId=%s, endpointName=%s)",
-                                    endpointId, connectionInfo.getEndpointName()));
-                    Endpoint endpoint = new Endpoint(endpointId, connectionInfo.getEndpointName());
-                    mPendingConnections.put(endpointId, endpoint);
-                    ConnectionsActivity.this.onConnectionInitiated(endpoint, connectionInfo);
-                }
+    private final Context mContext;
 
-                @Override
-                public void onConnectionResult(String endpointId, ConnectionResolution result) {
-                    logD(String.format("onConnectionResponse(endpointId=%s, result=%s)", endpointId, result));
+    private final ZeroDataMultiPathListener listener;
 
-                    // We're no longer connecting
-                    mIsConnecting = false;
+    private static ZeroDataMultiPathConnector instance;
 
-                    if (!result.getStatus().isSuccess()) {
-                        logW(
-                                String.format(
-                                        "Connection failed. Received status %s.",
-                                        ConnectionsActivity.toString(result.getStatus())));
-                        onConnectionFailed(mPendingConnections.remove(endpointId));
-                        return;
-                    }
-                    connectedToEndpoint(mPendingConnections.remove(endpointId));
-                }
-
-                @Override
-                public void onDisconnected(String endpointId) {
-                    if (!mEstablishedConnections.containsKey(endpointId)) {
-                        logW("Unexpected disconnection from endpoint " + endpointId);
-                        return;
-                    }
-                    disconnectedFromEndpoint(mEstablishedConnections.get(endpointId));
-                }
-            };
-
-    /** Callbacks for payloads (bytes of data) sent from another device to us. */
-    private final PayloadCallback mPayloadCallback =
-            new PayloadCallback() {
-                @Override
-                public void onPayloadReceived(String endpointId, Payload payload) {
-                    logD(String.format("onPayloadReceived(endpointId=%s, payload=%s)", endpointId, payload));
-                    onReceive(mEstablishedConnections.get(endpointId), payload);
-                }
-
-                @Override
-                public void onPayloadTransferUpdate(String endpointId, PayloadTransferUpdate update) {
-                    logD(
-                            String.format(
-                                    "onPayloadTransferUpdate(endpointId=%s, update=%s)", endpointId, update));
-                }
-            };
-
-    /** Called when our Activity is first created. */
-    @Override
-    protected void onCreate(@Nullable Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        mConnectionsClient = Nearby.getConnectionsClient(this);
+    private ZeroDataMultiPathConnector(Context context, String localEndpointName, String serviceId, Strategy strategy, Endpoint.EndpointType type, ZeroDataMultiPathListener listener) {
+        this.mConnectionsClient = Nearby.getConnectionsClient(context);
+        this.mLocalEndpointName = localEndpointName;
+        this.mAppServiceId = serviceId;
+        this.mStrategy = strategy;
+        this.mType = type;
+        this.mContext = context;
+        this.listener = listener;
     }
 
-    /** Called when our Activity has been made visible to the user. */
-    @Override
-    protected void onStart() {
-        super.onStart();
-        if (!hasPermissions(this, getRequiredPermissions())) {
+    public static synchronized ZeroDataMultiPathConnector getInstance(Context context, String localEndpointName, String serviceId, Strategy strategy, Endpoint.EndpointType type, ZeroDataMultiPathListener listener) {
+        if (instance == null) {
+            instance = new ZeroDataMultiPathConnector(context, localEndpointName, serviceId, strategy, type, listener);
+        }
+        return instance;
+    }
+
+    /**
+     * Called when our Activity has been made visible to the user.
+     */
+    protected void requestNeededPermissions(Activity activity) {
+        if (!hasPermissions(activity, getRequiredPermissions())) {
             if (Build.VERSION.SDK_INT < 23) {
                 ActivityCompat.requestPermissions(
-                        this, getRequiredPermissions(), REQUEST_CODE_REQUIRED_PERMISSIONS);
+                        activity, getRequiredPermissions(), REQUEST_CODE_REQUIRED_PERMISSIONS);
             } else {
-                requestPermissions(getRequiredPermissions(), REQUEST_CODE_REQUIRED_PERMISSIONS);
+                activity.requestPermissions(getRequiredPermissions(), REQUEST_CODE_REQUIRED_PERMISSIONS);
             }
         }
     }
 
-    /** Called when the user has accepted (or denied) our permission request. */
-    @CallSuper
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    /**
+     * Called when the user has accepted (or denied) our permission request.
+     */
+    public boolean onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode == REQUEST_CODE_REQUIRED_PERMISSIONS) {
             int i = 0;
             for (int grantResult : grantResults) {
                 if (grantResult == PackageManager.PERMISSION_DENIED) {
                     logW("Failed to request the permission " + permissions[i]);
-                    Toast.makeText(this, R.string.error_missing_permissions, Toast.LENGTH_LONG).show();
-                    finish();
-                    return;
+                    Toast.makeText(mContext, R.string.error_missing_permissions, Toast.LENGTH_LONG).show();
+                    return false;
                 }
                 i++;
             }
-            recreate();
         }
 
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        return true;
     }
 
     /**
@@ -234,22 +210,21 @@ public abstract class ConnectionsActivity extends Activity {
      */
     protected void startAdvertising() {
         mIsAdvertising = true;
-        final String localEndpointName = getName();
 
         AdvertisingOptions.Builder advertisingOptions = new AdvertisingOptions.Builder();
-        advertisingOptions.setStrategy(getStrategy());
+        advertisingOptions.setStrategy(mStrategy);
 
         mConnectionsClient
                 .startAdvertising(
-                        localEndpointName,
-                        getServiceId(),
+                        mLocalEndpointName,
+                        mAppServiceId,
                         mConnectionLifecycleCallback,
                         advertisingOptions.build())
                 .addOnSuccessListener(
                         new OnSuccessListener<Void>() {
                             @Override
                             public void onSuccess(Void unusedResult) {
-                                logV("Now advertising endpoint " + localEndpointName);
+                                logV("Now advertising endpoint " + mLocalEndpointName);
                                 onAdvertisingStarted();
                             }
                         })
@@ -264,22 +239,106 @@ public abstract class ConnectionsActivity extends Activity {
                         });
     }
 
-    /** Stops advertising. */
+    /**
+     * Callbacks for connections to other devices.
+     */
+    private final ConnectionLifecycleCallback mConnectionLifecycleCallback =
+            new ConnectionLifecycleCallback() {
+                @Override
+                public void onConnectionInitiated(@NonNull String endpointId, ConnectionInfo connectionInfo) {
+                    logD(
+                            String.format(
+                                    "onConnectionInitiated(endpointId=%s, endpointName=%s)",
+                                    endpointId, connectionInfo.getEndpointName()));
+                    Endpoint endpoint = new Endpoint(endpointId, connectionInfo.getEndpointName());
+                    mPendingConnections.put(endpointId, endpoint);
+                    ZeroDataMultiPathConnector.this.onConnectionInitiated(endpoint, connectionInfo);
+                }
+
+                @Override
+                public void onConnectionResult(@NonNull String endpointId, @NonNull ConnectionResolution result) {
+                    logD(String.format("onConnectionResponse(endpointId=%s, result=%s)", endpointId, result));
+
+                    // We're no longer connecting
+                    mIsConnecting = false;
+
+                    if (!result.getStatus().isSuccess()) {
+                        logW(
+                                String.format(
+                                        "Connection failed. Received status %s.",
+                                        ZeroDataMultiPathConnector.toString(result.getStatus())));
+                        onConnectionFailed(mPendingConnections.remove(endpointId), new Throwable("Connection failed. Received status %s."));
+                        return;
+                    }
+                    connectedToEndpoint(mPendingConnections.remove(endpointId));
+                }
+
+                @Override
+                public void onDisconnected(@NonNull String endpointId) {
+                    if (!isConnectedToEndpoint(endpointId)) {
+                        logW("Unexpected disconnection from endpoint " + endpointId);
+                        return;
+                    }
+                    disconnectedFromEndpoint(mEstablishedConnections.get(endpointId));
+                }
+            };
+
+    /**
+     * Callbacks for payloads (bytes of data) sent from another device to us.
+     */
+    private final PayloadCallback mPayloadCallback =
+            new PayloadCallback() {
+                @Override
+                public void onPayloadReceived(@NonNull String endpointId, @NonNull Payload payload) {
+                    logD(String.format("onPayloadReceived(endpointId=%s, payload=%s)", endpointId, payload));
+                    onReceive(mEstablishedConnections.get(endpointId), payload);
+                }
+
+                @Override
+                public void onPayloadTransferUpdate(@NonNull String endpointId, @NonNull PayloadTransferUpdate update) {
+                    logD(
+                            String.format(
+                                    "onPayloadTransferUpdate(endpointId=%s, update=%s)", endpointId, update));
+                    listener.onPayloadTransferUpdate(endpointId, update);
+                }
+            };
+
+    /**
+     * Stops advertising.
+     */
     protected void stopAdvertising() {
         mIsAdvertising = false;
         mConnectionsClient.stopAdvertising();
     }
 
-    /** Returns {@code true} if currently advertising. */
+    public boolean isConnectedToEndpoint(String endpointId){
+        return mEstablishedConnections.containsKey(endpointId);
+    }
+
+    public boolean isSelf(String endpointName){
+        return Objects.equals(mLocalEndpointName, endpointName);
+    }
+
+    /**
+     * Returns {@code true} if currently advertising.
+     */
     protected boolean isAdvertising() {
         return mIsAdvertising;
     }
 
-    /** Called when advertising successfully starts. Override this method to act on the event. */
-    protected void onAdvertisingStarted() {}
+    /**
+     * Called when advertising successfully starts. Override this method to act on the event.
+     */
+    protected void onAdvertisingStarted() {
+        listener.onAdvertisingStarted();
+    }
 
-    /** Called when advertising fails to start. Override this method to act on the event. */
-    protected void onAdvertisingFailed() {}
+    /**
+     * Called when advertising fails to start. Override this method to act on the event.
+     */
+    protected void onAdvertisingFailed() {
+        listener.onAdvertisingFailed();
+    }
 
     /**
      * Called when a pending connection with a remote endpoint is created. Use {@link ConnectionInfo}
@@ -287,9 +346,13 @@ public abstract class ConnectionsActivity extends Activity {
      * we want to continue with the connection, call {@link #acceptConnection(Endpoint)}. Otherwise,
      * call {@link #rejectConnection(Endpoint)}.
      */
-    protected void onConnectionInitiated(Endpoint endpoint, ConnectionInfo connectionInfo) {}
+    protected void onConnectionInitiated(Endpoint endpoint, ConnectionInfo connectionInfo) {
+        listener.onEndpointConnectionInitiated(endpoint, connectionInfo);
+    }
 
-    /** Accepts a connection request. */
+    /**
+     * Accepts a connection request.
+     */
     protected void acceptConnection(final Endpoint endpoint) {
         mConnectionsClient
                 .acceptConnection(endpoint.getId(), mPayloadCallback)
@@ -302,7 +365,9 @@ public abstract class ConnectionsActivity extends Activity {
                         });
     }
 
-    /** Rejects a connection request. */
+    /**
+     * Rejects a connection request.
+     */
     protected void rejectConnection(Endpoint endpoint) {
         mConnectionsClient
                 .rejectConnection(endpoint.getId())
@@ -317,17 +382,17 @@ public abstract class ConnectionsActivity extends Activity {
 
     /**
      * Sets the device to discovery mode. It will now listen for devices in advertising mode. Either
-     * {@link #onDiscoveryStarted()} or {@link #onDiscoveryFailed()} will be called once we've found
+     * {@link #onDiscoveryStarted()} or {@link #onDiscoveryFailed(Exception)} will be called once we've found
      * out if we successfully entered this mode.
      */
-    protected void startDiscovering() {
+    protected void startDiscovery() {
         mIsDiscovering = true;
         mDiscoveredEndpoints.clear();
         DiscoveryOptions.Builder discoveryOptions = new DiscoveryOptions.Builder();
-        discoveryOptions.setStrategy(getStrategy());
+        discoveryOptions.setStrategy(mStrategy);
         mConnectionsClient
                 .startDiscovery(
-                        getServiceId(),
+                        mAppServiceId,
                         new EndpointDiscoveryCallback() {
                             @Override
                             public void onEndpointFound(String endpointId, DiscoveredEndpointInfo info) {
@@ -336,7 +401,7 @@ public abstract class ConnectionsActivity extends Activity {
                                                 "onEndpointFound(endpointId=%s, serviceId=%s, endpointName=%s)",
                                                 endpointId, info.getServiceId(), info.getEndpointName()));
 
-                                if (getServiceId().equals(info.getServiceId())) {
+                                if (mAppServiceId.equals(info.getServiceId())) {
                                     Endpoint endpoint = new Endpoint(endpointId, info.getEndpointName());
                                     mDiscoveredEndpoints.put(endpointId, endpoint);
                                     onEndpointDiscovered(endpoint);
@@ -362,41 +427,59 @@ public abstract class ConnectionsActivity extends Activity {
                             public void onFailure(@NonNull Exception e) {
                                 mIsDiscovering = false;
                                 logW("startDiscovering() failed.", e);
-                                onDiscoveryFailed();
+                                onDiscoveryFailed(e);
                             }
                         });
     }
 
-    /** Stops discovery. */
+    /**
+     * Stops discovery.
+     */
     protected void stopDiscovering() {
         mIsDiscovering = false;
         mConnectionsClient.stopDiscovery();
     }
 
-    /** Returns {@code true} if currently discovering. */
+    /**
+     * Returns {@code true} if currently discovering.
+     */
     protected boolean isDiscovering() {
         return mIsDiscovering;
     }
 
-    /** Called when discovery successfully starts. Override this method to act on the event. */
-    protected void onDiscoveryStarted() {}
+    /**
+     * Called when discovery successfully starts. Override this method to act on the event.
+     */
+    protected void onDiscoveryStarted() {
+        listener.onDiscoveryStarted();
+    }
 
-    /** Called when discovery fails to start. Override this method to act on the event. */
-    protected void onDiscoveryFailed() {}
+    /**
+     * Called when discovery fails to start. Override this method to act on the event.
+     */
+    protected void onDiscoveryFailed(Throwable throwable) {
+        listener.onDiscoveryFailed(throwable);
+    }
 
     /**
      * Called when a remote endpoint is discovered. To connect to the device, call {@link
-     * #connectToEndpoint(Endpoint)}.
+     * #initiateConnectionToEndpoint(Endpoint)}.
      */
-    protected void onEndpointDiscovered(Endpoint endpoint) {}
+    protected void onEndpointDiscovered(Endpoint endpoint) {
+        listener.onEndpointDiscovered(endpoint);
+    }
 
-    /** Disconnects from the given endpoint. */
+    /**
+     * Disconnects from the given endpoint.
+     */
     protected void disconnect(Endpoint endpoint) {
         mConnectionsClient.disconnectFromEndpoint(endpoint.getId());
         mEstablishedConnections.remove(endpoint.getId());
     }
 
-    /** Disconnects from all currently connected endpoints. */
+    /**
+     * Disconnects from all currently connected endpoints.
+     */
     protected void disconnectFromAllEndpoints() {
         for (Endpoint endpoint : mEstablishedConnections.values()) {
             mConnectionsClient.disconnectFromEndpoint(endpoint.getId());
@@ -404,7 +487,9 @@ public abstract class ConnectionsActivity extends Activity {
         mEstablishedConnections.clear();
     }
 
-    /** Resets and clears all state in Nearby Connections. */
+    /**
+     * Resets and clears all state in Nearby Connections.
+     */
     protected void stopAllEndpoints() {
         mConnectionsClient.stopAllEndpoints();
         mIsAdvertising = false;
@@ -420,26 +505,28 @@ public abstract class ConnectionsActivity extends Activity {
      * ConnectionInfo)} or {@link #onConnectionFailed(Endpoint)} will be called once we've found out
      * if we successfully reached the device.
      */
-    protected void connectToEndpoint(final Endpoint endpoint) {
-        logV("Sending a connection request to endpoint " + endpoint);
+    protected void initiateConnectionToEndpoint(final Endpoint endpoint) {
+        Log.d(TAG,"Sending a connection request to endpoint " + endpoint);
         // Mark ourselves as connecting so we don't connect multiple times
         mIsConnecting = true;
 
         // Ask to connect
         mConnectionsClient
-                .requestConnection(getName(), endpoint.getId(), mConnectionLifecycleCallback)
+                .requestConnection(mLocalEndpointName, endpoint.getId(), mConnectionLifecycleCallback)
                 .addOnFailureListener(
                         new OnFailureListener() {
                             @Override
                             public void onFailure(@NonNull Exception e) {
                                 logW("requestConnection() failed.", e);
                                 mIsConnecting = false;
-                                onConnectionFailed(endpoint);
+                                onConnectionFailed(endpoint, e);
                             }
                         });
     }
 
-    /** Returns {@code true} if we're currently attempting to connect to another device. */
+    /**
+     * Returns {@code true} if we're currently attempting to connect to another device.
+     */
     protected final boolean isConnecting() {
         return mIsConnecting;
     }
@@ -460,21 +547,35 @@ public abstract class ConnectionsActivity extends Activity {
      * Called when a connection with this endpoint has failed. Override this method to act on the
      * event.
      */
-    protected void onConnectionFailed(Endpoint endpoint) {}
+    protected void onConnectionFailed(Endpoint endpoint, Throwable throwable) {
+        listener.onEndpointConnectionFailed(new Throwable("Endpoint connection to " + endpoint.name + " - " + throwable.getMessage()));
+    }
 
-    /** Called when someone has connected to us. Override this method to act on the event. */
-    protected void onEndpointConnected(Endpoint endpoint) {}
+    /**
+     * Called when someone has connected to us. Override this method to act on the event.
+     */
+    protected void onEndpointConnected(Endpoint endpoint) {
+        listener.onEndpointConnected(endpoint);
+    }
 
-    /** Called when someone has disconnected. Override this method to act on the event. */
-    protected void onEndpointDisconnected(Endpoint endpoint) {}
+    /**
+     * Called when someone has disconnected. Override this method to act on the event.
+     */
+    protected void onEndpointDisconnected(Endpoint endpoint) {
+        listener.onEndpointDisconnected(endpoint);
+    }
 
-    /** Returns a list of currently connected endpoints. */
-    protected Set<Endpoint> getDiscoveredEndpoints() {
+    /**
+     * Returns a list of currently connected endpoints.
+     */
+    public Set<Endpoint> getDiscoveredEndpoints() {
         return new HashSet<>(mDiscoveredEndpoints.values());
     }
 
-    /** Returns a list of currently connected endpoints. */
-    protected Set<Endpoint> getConnectedEndpoints() {
+    /**
+     * Returns a list of currently connected endpoints.
+     */
+    public Set<Endpoint> getConnectedEndpoints() {
         return new HashSet<>(mEstablishedConnections.values());
     }
 
@@ -484,21 +585,24 @@ public abstract class ConnectionsActivity extends Activity {
      * @param payload The data you want to send.
      */
     protected void send(Payload payload) {
-        // list connected endpoints
-        for (String k : mEstablishedConnections.keySet()) {
-            Log.d(TAG, "*********** endpoint: "+k);
-        }
         send(payload, mEstablishedConnections.keySet());
     }
 
     private void send(Payload payload, Set<String> endpoints) {
         mConnectionsClient
                 .sendPayload(new ArrayList<>(endpoints), payload)
+                .addOnSuccessListener(new OnSuccessListener<Void>() {
+                    @Override
+                    public void onSuccess(Void unused) {
+                        listener.onPayloadSent(String.valueOf(payload.getId()));
+                    }
+                })
                 .addOnFailureListener(
                         new OnFailureListener() {
                             @Override
                             public void onFailure(@NonNull Exception e) {
                                 logW("sendPayload() failed.", e);
+                                listener.onPayloadFailed(e, String.valueOf(payload.getId()));
                             }
                         });
     }
@@ -507,9 +611,11 @@ public abstract class ConnectionsActivity extends Activity {
      * Someone connected to us has sent us data. Override this method to act on the event.
      *
      * @param endpoint The sender.
-     * @param payload The data.
+     * @param payload  The data.
      */
-    protected void onReceive(Endpoint endpoint, Payload payload) {}
+    protected void onReceive(Endpoint endpoint, Payload payload) {
+        listener.onPayloadReceived(endpoint.getId(), payload);
+    }
 
     /**
      * An optional hook to pool any permissions the app needs with the permissions ConnectionsActivity
@@ -520,22 +626,6 @@ public abstract class ConnectionsActivity extends Activity {
     protected String[] getRequiredPermissions() {
         return REQUIRED_PERMISSIONS;
     }
-
-    /** Returns the client's name. Visible to others when connecting. */
-    protected abstract String getName();
-
-    /**
-     * Returns the service id. This represents the action this connection is for. When discovering,
-     * we'll verify that the advertiser has the same service id before we consider connecting to them.
-     */
-    protected abstract String getServiceId();
-
-    /**
-     * Returns the strategy we use to connect to other devices. Only devices using the same strategy
-     * and service id will appear when discovering. Stragies determine how many incoming and outgoing
-     * connections are possible at the same time, as well as how much bandwidth is available for use.
-     */
-    protected abstract Strategy getStrategy();
 
     /**
      * Transforms a {@link Status} into a English-readable message for logging.
@@ -567,6 +657,12 @@ public abstract class ConnectionsActivity extends Activity {
         return true;
     }
 
+    public static String getDeviceIdentifier(Context context, Endpoint.EndpointType type) {
+        String androidId = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        String deviceModel = Build.MANUFACTURER + android.os.Build.MODEL;
+        return androidId + "__" + deviceModel + "@" + type;
+    }
+
     @CallSuper
     protected void logV(String msg) {
         Log.v(TAG, msg);
@@ -592,10 +688,22 @@ public abstract class ConnectionsActivity extends Activity {
         Log.e(TAG, msg, e);
     }
 
-    /** Represents a device we can talk to. */
-    protected static class Endpoint {
-        @NonNull private final String id;
-        @NonNull private final String name;
+    /**
+     * Represents a device we can talk to.
+     */
+    public static class Endpoint {
+
+        public enum EndpointType {
+            GATEWAY_NODE,
+            SUBSCRIBER_NODE;
+        }
+
+        @NonNull
+        private final String id;
+        @NonNull
+        private final String name;
+        @NonNull
+        private EndpointType type = EndpointType.SUBSCRIBER_NODE;
 
         private Endpoint(@NonNull String id, @NonNull String name) {
             this.id = id;
@@ -610,6 +718,11 @@ public abstract class ConnectionsActivity extends Activity {
         @NonNull
         public String getName() {
             return name;
+        }
+
+        @NonNull
+        public EndpointType getType() {
+            return EndpointType.valueOf(name.split("@")[1]);
         }
 
         @Override
@@ -630,5 +743,33 @@ public abstract class ConnectionsActivity extends Activity {
         public String toString() {
             return String.format("Endpoint{id=%s, name=%s}", id, name);
         }
+    }
+
+    public interface ZeroDataMultiPathListener {
+        void onAdvertisingStarted();
+
+        void onAdvertisingFailed();
+
+        void onDiscoveryStarted();
+
+        void onDiscoveryFailed(Throwable throwable);
+
+        void onEndpointConnected(Endpoint endpoint);
+
+        void onEndpointConnectionFailed(Throwable throwable);
+
+        void onEndpointConnectionInitiated(Endpoint endpoint, ConnectionInfo connectionInfo);
+
+        void onEndpointDisconnected(Endpoint endpoint);
+
+        void onEndpointDiscovered(Endpoint endpoint);
+
+        void onPayloadReceived(@NonNull String endpointId, @NonNull Payload payload);
+
+        void onPayloadTransferUpdate(@NonNull String endpointId, @NonNull PayloadTransferUpdate update);
+
+        void onPayloadSent(String id);
+
+        void onPayloadFailed(Throwable throwable, String id);
     }
 }

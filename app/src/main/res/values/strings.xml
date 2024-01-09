@@ -17,4 +17,5 @@
     <string name="connected">ToyVPN is connected!</string>
     <string name="disconnected">ToyVPN is disconnected!</string>
     <string name="connect">Connect!</string>
+    <string name="title_activity_multi_path">MultiPathActivity</string>
 </resources>
