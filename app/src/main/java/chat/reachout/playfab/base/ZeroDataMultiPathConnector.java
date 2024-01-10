@@ -1,4 +1,4 @@
-package chat.reachout.playfab;
+package chat.reachout.playfab.base;
 
 import android.Manifest;
 import android.app.Activity;
@@ -42,6 +42,8 @@ import java.util.Objects;
 import java.util.Set;
 
 import static chat.reachout.playfab.Constants.TAG;
+
+import chat.reachout.playfab.R;
 
 /**
  * A class that connects to Nearby Connections and provides convenience methods and callbacks.
@@ -120,6 +122,10 @@ public class ZeroDataMultiPathConnector {
      * there will only be one entry in this map.
      */
     private final Map<String, Endpoint> mEstablishedConnections = new HashMap<>();
+
+    private final HashSet<String> mEstablishedGateWayConnections = new HashSet<>();
+
+    private final HashSet<String> mEstablishedSubscriberConnections = new HashSet<>();
 
     /**
      * Our handler to Nearby Connections.
@@ -290,15 +296,15 @@ public class ZeroDataMultiPathConnector {
             new PayloadCallback() {
                 @Override
                 public void onPayloadReceived(@NonNull String endpointId, @NonNull Payload payload) {
-                    logD(String.format("onPayloadReceived(endpointId=%s, payload=%s)", endpointId, payload));
+//                    logD(String.format("onPayloadReceived(endpointId=%s, payload=%s)", endpointId, payload));
                     onReceive(mEstablishedConnections.get(endpointId), payload);
                 }
 
                 @Override
                 public void onPayloadTransferUpdate(@NonNull String endpointId, @NonNull PayloadTransferUpdate update) {
-                    logD(
-                            String.format(
-                                    "onPayloadTransferUpdate(endpointId=%s, update=%s)", endpointId, update));
+//                    logD(
+//                            String.format(
+//                                    "onPayloadTransferUpdate(endpointId=%s, update=%s)", endpointId, update));
                     listener.onPayloadTransferUpdate(endpointId, update);
                 }
             };
@@ -311,11 +317,11 @@ public class ZeroDataMultiPathConnector {
         mConnectionsClient.stopAdvertising();
     }
 
-    public boolean isConnectedToEndpoint(String endpointId){
+    public boolean isConnectedToEndpoint(String endpointId) {
         return mEstablishedConnections.containsKey(endpointId);
     }
 
-    public boolean isSelf(String endpointName){
+    public boolean isSelf(String endpointName) {
         return Objects.equals(mLocalEndpointName, endpointName);
     }
 
@@ -404,6 +410,7 @@ public class ZeroDataMultiPathConnector {
                                 if (mAppServiceId.equals(info.getServiceId())) {
                                     Endpoint endpoint = new Endpoint(endpointId, info.getEndpointName());
                                     mDiscoveredEndpoints.put(endpointId, endpoint);
+                                    stopDiscovering();
                                     onEndpointDiscovered(endpoint);
                                 }
                             }
@@ -506,7 +513,7 @@ public class ZeroDataMultiPathConnector {
      * if we successfully reached the device.
      */
     protected void initiateConnectionToEndpoint(final Endpoint endpoint) {
-        Log.d(TAG,"Sending a connection request to endpoint " + endpoint);
+        Log.d(TAG, "Sending a connection request to endpoint " + endpoint);
         // Mark ourselves as connecting so we don't connect multiple times
         mIsConnecting = true;
 
@@ -534,6 +541,11 @@ public class ZeroDataMultiPathConnector {
     private void connectedToEndpoint(Endpoint endpoint) {
         logD(String.format("connectedToEndpoint(endpoint=%s)", endpoint));
         mEstablishedConnections.put(endpoint.getId(), endpoint);
+        if (endpoint.getType() == Endpoint.EndpointType.GATEWAY_NODE) {
+            mEstablishedGateWayConnections.add(endpoint.id);
+        } else {
+            mEstablishedSubscriberConnections.add(endpoint.id);
+        }
         onEndpointConnected(endpoint);
     }
 
@@ -587,6 +599,35 @@ public class ZeroDataMultiPathConnector {
     protected void send(Payload payload) {
         send(payload, mEstablishedConnections.keySet());
     }
+
+    private HashSet<String> getCurrentGateway() {
+        logW(String.format("getCurrentGateway() found %d gateways, there are %d total nodes.", mEstablishedGateWayConnections.size(), mEstablishedConnections.values().size()));
+
+        return mEstablishedGateWayConnections;
+    }
+
+    protected void sendToGateWayNode(Payload payload) {
+        if(getCurrentGateway().isEmpty()){
+            logW(String.format("getCurrentGateway() Not sending because there are no gateways"));
+            return;
+        }
+        send(payload, getCurrentGateway());
+    }
+
+    private HashSet<String> getSubscriberNode() {
+        logW(String.format("getSubscriberNode() found %d gateways, there are %d total nodes.", mEstablishedSubscriberConnections.size(), mEstablishedConnections.values().size()));
+
+        return mEstablishedSubscriberConnections;
+    }
+
+    protected void sendToSubscriberNode(Payload payload) {
+        if(getSubscriberNode().isEmpty()){
+            logW(String.format("sendToSubscriberNode() Not sending because there are no subs"));
+            return;
+        }
+        send(payload, getSubscriberNode());
+    }
+
 
     private void send(Payload payload, Set<String> endpoints) {
         mConnectionsClient

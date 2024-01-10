@@ -7,11 +7,22 @@
     android:padding="16dp"
     tools:context=".MultiPathActivity">
 
-    <Switch
-        android:id="@+id/switch_id"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Gateway Mode" />
+   <LinearLayout
+       android:layout_width="match_parent"
+       android:layout_marginBottom="16dp"
+       android:layout_height="wrap_content">
+       <Switch
+           android:id="@+id/switch_id"
+           android:layout_width="wrap_content"
+           android:layout_height="wrap_content"
+           android:layout_gravity="center"
+           android:text="Gateway Mode" />
+
+       <Button style="@style/item"
+           android:id="@+id/connect_btn"
+           android:layout_gravity="bottom"
+           android:text="@string/connect"/>
+   </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

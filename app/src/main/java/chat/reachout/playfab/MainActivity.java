@@ -1,7 +1,6 @@
 package chat.reachout.playfab;
 
 
-import android.animation.Animator;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -17,19 +16,16 @@ import android.widget.Toast;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.UiThread;
-import androidx.core.content.ContextCompat;
-import androidx.core.view.ViewCompat;
 
 import com.google.android.gms.nearby.connection.ConnectionInfo;
 import com.google.android.gms.nearby.connection.Payload;
 import com.google.android.gms.nearby.connection.Strategy;
 
-import java.util.Arrays;
 import java.util.Random;
-import java.util.Set;
-import java.util.stream.Collectors;
 
-public class MainActivity extends ConnectionsActivity implements ZerodataVPNService.ServiceCallbacks {
+import chat.reachout.playfab.base.ZerodataMultipathSubscriberVPNService;
+
+public class MainActivity extends ConnectionsActivity  {
     /**
      * A set of background colors. We'll hash the authentication token we get from connecting to a
      * device to pick a color randomly from this list. Devices with the same background color are
@@ -74,7 +70,7 @@ public class MainActivity extends ConnectionsActivity implements ZerodataVPNServ
      */
     private State mState = State.UNKNOWN;
 
-    ZerodataVPNService mService;
+    ZerodataMultipathSubscriberVPNService mService;
     boolean mBound = false;
 
     /**
@@ -123,10 +119,10 @@ public class MainActivity extends ConnectionsActivity implements ZerodataVPNServ
         public void onServiceConnected(ComponentName className,
                                        IBinder service) {
             // We've bound to LocalService, cast the IBinder and get LocalService instance.
-            ZerodataVPNService.LocalBinder binder = (ZerodataVPNService.LocalBinder) service;
+            ZerodataMultipathSubscriberVPNService.LocalBinder binder = (ZerodataMultipathSubscriberVPNService.LocalBinder) service;
             mService = binder.getService();
             mBound = true;
-            mService.setCallbacks(MainActivity.this); // register
+            //mService.setCallbacks(MainActivity.this); // register
         }
 
         @Override
@@ -135,23 +131,16 @@ public class MainActivity extends ConnectionsActivity implements ZerodataVPNServ
         }
     };
 
-    /* Defined by ServiceCallbacks interface */
-    @Override
-    public void sendPacketPayload(byte[] payload) {
-        Log.d("MainActivity", "************* Packet Sent!!!!!");
-        send(Payload.fromBytes(payload));
-    }
-
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         if (result == RESULT_OK) {
             Intent intent = getServiceIntent();
-            startService(intent.setAction(ZerodataVPNService.ACTION_CONNECT));
+            startService(intent.setAction(ZerodataMultipathSubscriberVPNService.ACTION_CONNECT));
             bindService(intent, connection, Context.BIND_AUTO_CREATE);
         }
     }
     private Intent getServiceIntent() {
-        return new Intent(this, ZerodataVPNService.class);
+        return new Intent(this, ZerodataMultipathSubscriberVPNService.class);
     }
 
     @Override
@@ -170,7 +159,7 @@ public class MainActivity extends ConnectionsActivity implements ZerodataVPNServ
 
         // Unbind from service
         if (mBound) {
-            mService.setCallbacks(null); // unregister
+            //.setCallbacks(null); // unregister
             unbindService(connection);
             mBound = false;
         }
